@@ -1,89 +1,174 @@
 package main
 
 import (
-	"flag"
-	"fmt"
+	"log"
+	"math"
+
+	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/hajimehoshi/ebiten/v2/inpututil"
 )
 
-var board = [][]uint8{
-	{0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-	{0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-	{0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-	{0, 0, 0, 1, 1, 1, 0, 0, 0, 0},
-	{0, 0, 0, 0, 1, 0, 0, 0, 0, 0},
-	{0, 0, 0, 0, 1, 0, 0, 0, 0, 0},
-	{0, 0, 0, 0, 0, 1, 0, 0, 0, 0},
-	{0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-	{0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-	{0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+var (
+	ColorWhite = Pixel{0xff, 0xff, 0xff, 0xff}
+	ColorRed   = Pixel{0xff, 0x0, 0x0, 0xff}
+	ColorGreen = Pixel{0x0, 0xff, 0x0, 0xff}
+)
+
+const (
+	GameHeight = 240
+	GameWidth  = 320
+	DotSize    = 9
+)
+
+type Pixel struct {
+	R byte
+	G byte
+	B byte
+	A byte
 }
 
 func main() {
-	var iterations uint
+	ebiten.SetWindowSize(640, 480)
+	ebiten.SetWindowTitle("Hello, World!")
 
-	flag.UintVar(&iterations, "n", 1, "The number of iterations to run")
-	flag.Parse()
-
-	for i := 0; i < int(iterations); i++ {
-		iterate(&board)
+	game := &Game{
+		selectedGrid: make(Grid, GameWidth/5*GameHeight/5),
 	}
 
-	for _, row := range board {
-		fmt.Println(row)
+	if err := ebiten.RunGame(game); err != nil {
+		log.Fatal(err)
 	}
 }
 
-// iterate runs a single step of the rules
-func iterate(state *[][]uint8) {
-	newState := make([][]uint8, len(*state))
+type Game struct {
+	grid         []byte
+	selectedGrid Grid
+}
 
-	for y, row := range *state {
-		newState[y] = make([]uint8, len(row))
+func (g *Game) Update() error {
+	if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
+		if x, y, ok := cursorGridPos(); ok {
+			i := g.selectedGrid.coordsToIndex(x, y)
+			log.Print(x, y, i)
+			log.Print(g.selectedGrid.indexToCoords(i))
+			g.selectedGrid[i] = !g.selectedGrid[i]
 
-		for x, cell := range row {
-			count := neighbourCount(x, y, *state)
-
-			switch true {
-			case count < 2:
-				newState[y][x] = 0
-			case count > 2:
-				newState[y][x] = 1
-			default:
-				newState[y][x] = cell
-			}
+			log.Print(len(g.selectedGrid))
 		}
 	}
 
-	*state = newState
+	return nil
 }
 
-// neighbourCount of the cell at the given coords
-func neighbourCount(x, y int, state [][]uint8) int {
-	var count int
-	width := len(state)
-	height := len(state[0])
+func (g *Game) Draw(screen *ebiten.Image) {
+	g.buildGrid()
+	g.buildSelectedDots()
+	g.buildCursorPos()
 
-	for i := -1; i <= 1; i++ {
-		if y+i < 0 || y+i >= height {
+	screen.WritePixels(g.grid)
+}
+
+func (g *Game) buildGrid() {
+	g.grid = make([]byte, GameWidth*GameHeight*4)
+
+	for col := DotSize; col < GameWidth; col += DotSize + 1 {
+		for row := 0; row < GameHeight; row++ {
+			writePixel(g.grid, col, row, ColorWhite)
+		}
+	}
+
+	for row := DotSize; row < GameHeight; row += DotSize + 1 {
+		for col := 0; col < GameWidth; col++ {
+			writePixel(g.grid, col, row, ColorWhite)
+		}
+	}
+}
+
+func (g *Game) buildSelectedDots() {
+	for i := 0; i < len(g.selectedGrid); i++ {
+		if !g.selectedGrid[i] {
 			continue
 		}
 
-		for j := -1; j <= 1; j++ {
-			if x+j < 0 || x+j >= width {
-				continue
-			}
+		x, y := g.selectedGrid.indexToCoords(i)
+		x, y = g.selectedGrid.toScreen(x, y)
 
-			if i == 0 && j == 0 {
-				continue
+		for w := 0; w < DotSize; w++ {
+			for h := 0; h < DotSize; h++ {
+				writePixel(g.grid, x+w, h+y, ColorGreen)
 			}
-
-			if count >= 3 {
-				continue
-			}
-
-			count += int(state[y+i][x+j])
 		}
 	}
+}
 
-	return count
+func (g *Game) buildCursorPos() {
+	x, y, ok := cursorGridPos()
+	if !ok {
+		return
+	}
+
+	x, y = g.selectedGrid.toScreen(x, y)
+
+	for w := 0; w < DotSize; w++ {
+		for h := 0; h < DotSize; h++ {
+			writePixel(g.grid, x+w, h+y, ColorRed)
+		}
+	}
+}
+
+func (g *Game) Layout(outsideWidth, outsideHeight int) (screenWidth, screenHeight int) {
+	return GameWidth, GameHeight
+}
+
+func writePixel(grid []byte, x, y int, color Pixel) {
+	i := x * 4
+	i += y * GameWidth * 4
+
+	grid[i] = color.R
+	grid[i+1] = color.G
+	grid[i+2] = color.B
+	grid[i+3] = color.A
+}
+
+func cursorGridPos() (x, y int, ok bool) {
+	x, y = ebiten.CursorPosition()
+	if x < 0 || y < 0 {
+		return x, y, false
+	}
+
+	xdiff := x % (DotSize + 1)
+	ydiff := y % (DotSize + 1)
+
+	if xdiff == 0 || ydiff == 0 {
+		return x, y, false
+	}
+
+	x = int(math.Floor(float64(x) / (DotSize + 1)))
+	y = int(math.Floor(float64(y) / (DotSize + 1)))
+
+	return x, y, true
+}
+
+type Grid []bool
+
+func (Grid) toScreen(x, y int) (int, int) {
+	if x > 0 {
+		x = x * (DotSize + 1)
+	}
+	if y > 0 {
+		y = y * (DotSize + 1)
+	}
+
+	return x, y
+}
+
+func (Grid) coordsToIndex(x, y int) int {
+	return x + y*GameWidth/(DotSize+1)
+}
+
+func (Grid) indexToCoords(i int) (x, y int) {
+	x = i % (GameWidth / (DotSize + 1))
+	y = int((i - x) / (GameWidth / (DotSize + 1)))
+
+	return x, y
 }
